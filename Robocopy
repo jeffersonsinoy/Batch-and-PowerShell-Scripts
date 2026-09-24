@@ -1,0 +1,6 @@
+$timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm-ss"
+$log = "D:\robocopylogs\Robocopy_$timestamp.log"
+
+New-Item -ItemType Directory -Force -Path "D:\robocopylogs" | Out-Null
+
+robocopy "D:\SRC" "D:\DST" /E /COPYALL /DCOPY:DAT /R:3 /W:5 /TEE /LOG:$log
