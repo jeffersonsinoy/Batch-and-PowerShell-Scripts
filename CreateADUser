@@ -1,0 +1,149 @@
+C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Script\CreateAccount_v3.ps1"
+
+=====Script Here=====
+
+Import-Module ActiveDirectory
+
+# ==========================================================
+# Configuration
+# ==========================================================
+$ADServer = "JES-SVR-D01.jesinoy.local"
+$Domain   = "jesinoy.local"
+$OUPath   = "CN=Users,DC=jesinoy,DC=local"
+
+$CsvPath = "C:\Script\Accounts.csv"
+$LogFile = "C:\Script\CreateUsers.log"
+
+$DefaultPassword = ConvertTo-SecureString "P@ssw0rd123!" -AsPlainText -Force
+
+Start-Transcript -Path $LogFile -Append
+
+# ==========================================================
+# Import CSV
+# ==========================================================
+$Users = Import-Csv $CsvPath
+
+foreach ($User in $Users)
+{
+    $EmployeeID     = "$($User.EmployeeID)".Trim()
+    $FirstName      = "$($User.FirstName)".Trim()
+    $LastName       = "$($User.LastName)".Trim()
+    $SamAccountName = "$($User.SamAccountName)".Trim()
+
+    # ==========================================================
+    # Validate Required Fields
+    # ==========================================================
+
+    if (-not $EmployeeID)
+    {
+        Write-Host "[SKIPPED] Missing EmployeeID" -ForegroundColor Yellow
+        continue
+    }
+
+    if (-not $FirstName)
+    {
+        Write-Host "[SKIPPED] EmployeeID $EmployeeID - Missing FirstName" -ForegroundColor Yellow
+        continue
+    }
+
+    if (-not $LastName)
+    {
+        Write-Host "[SKIPPED] EmployeeID $EmployeeID - Missing LastName" -ForegroundColor Yellow
+        continue
+    }
+
+    if (-not $SamAccountName)
+    {
+        Write-Host "[SKIPPED] EmployeeID $EmployeeID - Missing SamAccountName" -ForegroundColor Yellow
+        continue
+    }
+
+    # EmployeeID must be numbers only
+    if ($EmployeeID -notmatch '^\d+$')
+    {
+        Write-Host "[SKIPPED] $SamAccountName - EmployeeID '$EmployeeID' contains non-numeric characters" -ForegroundColor Yellow
+        continue
+    }
+
+    # ==========================================================
+    # Build User Details
+    # ==========================================================
+
+    $FullName     = "$FirstName $LastName"
+    $Description  = "#$EmployeeID $FullName"
+    $EmailAddress = ("{0}.{1}@{2}" -f $FirstName,$LastName,$Domain).ToLower()
+
+    try
+    {
+        # Check existing SamAccountName
+
+        $ExistingSam = Get-ADUser `
+            -Server $ADServer `
+            -Filter "SamAccountName -eq '$SamAccountName'" `
+            -ErrorAction SilentlyContinue
+
+        if ($ExistingSam)
+        {
+            Write-Host "[SKIPPED] SamAccountName '$SamAccountName' already exists" -ForegroundColor Yellow
+            continue
+        }
+
+        # Check existing EmployeeID
+
+        $ExistingEmployeeID = Get-ADUser `
+            -Server $ADServer `
+            -LDAPFilter "(employeeID=$EmployeeID)" `
+            -ErrorAction SilentlyContinue
+
+        if ($ExistingEmployeeID)
+        {
+            Write-Host "[SKIPPED] EmployeeID '$EmployeeID' already exists" -ForegroundColor Yellow
+            continue
+        }
+
+        Write-Host "[INFO] Creating $SamAccountName..." -ForegroundColor Cyan
+
+        # ==========================================================
+        # Create AD User
+        # ==========================================================
+
+        New-ADUser `
+            -Server $ADServer `
+            -Path $OUPath `
+            -Name $FullName `
+            -DisplayName $FullName `
+            -GivenName $FirstName `
+            -Surname $LastName `
+            -SamAccountName $SamAccountName `
+            -Description $Description `
+            -EmployeeID $EmployeeID `
+            -UserPrincipalName $EmailAddress `
+            -EmailAddress $EmailAddress `
+            -Enabled $true `
+            -ChangePasswordAtLogon $true `
+            -AccountPassword $DefaultPassword
+
+        # ==========================================================
+        # Set RFC2307 Attributes
+        # ==========================================================
+
+        Set-ADUser `
+            -Server $ADServer `
+            -Identity $SamAccountName `
+            -Add @{
+                uid        = $SamAccountName
+                uidNumber  = $EmployeeID
+                gidNumber  = "1000"
+                loginShell = "/bin/csh"
+            }
+
+        Write-Host "[SUCCESS] Created $SamAccountName ($EmailAddress)" -ForegroundColor Green
+    }
+    catch
+    {
+        Write-Host "[ERROR] $SamAccountName : $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+Stop-Transcript
+Read-Host -Prompt "Press Enter to exit"
